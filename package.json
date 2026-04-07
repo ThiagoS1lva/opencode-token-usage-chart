@@ -1,0 +1,26 @@
+{
+  "name": "opencode-token-usage-chart",
+  "version": "0.1.0",
+  "description": "OpenCode TUI plugin for token usage charts",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "plugins/tui-token-usage.tsx",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "tokens"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
