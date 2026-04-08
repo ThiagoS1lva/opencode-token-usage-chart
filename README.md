@@ -1,68 +1,47 @@
-# opencode-token-usage-chart
+# @thiagos1lva/opencode-token-usage-chart
 
-OpenCode TUI plugin that adds a token usage chart screen.
+An OpenCode TUI plugin that adds a token usage chart view for your sessions.
 
-## Install from npm
-
-Package name:
-
-`@thiagos1lva/opencode-token-usage-chart`
-
-### Global install (all projects)
-
-Add to `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "@thiagos1lva/opencode-token-usage-chart"
-  ]
-}
-```
-
-### Local install (single repo)
-
-Add to `<repo>/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "@thiagos1lva/opencode-token-usage-chart"
-  ]
-}
-```
-
-OpenCode installs npm plugins automatically at startup.
-
-## Use
-
-- Run slash command `/token-chart`.
-- Or open command palette and run `token.usage.chart`.
-
-## Local development
-
-This repo also works as a local plugin via `tui.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    [
-      "./plugins/tui-token-usage.tsx",
-      {
-        "enabled": true
-      }
-    ]
-  ]
-}
-```
-
-## Publish checklist
+## Installation
 
 ```bash
-npm login
-npm pack --dry-run
-npm publish --access public
+npm install -g @thiagos1lva/opencode-token-usage-chart
+# or
+bun add -g @thiagos1lva/opencode-token-usage-chart
 ```
+
+## Usage
+
+Add the plugin to your `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@thiagos1lva/opencode-token-usage-chart"]
+}
+```
+
+> Note: in some OpenCode setups, the same config may be stored in `config.json` instead of `opencode.json`.
+
+That's it. OpenCode will load the plugin at startup.
+
+Then open the chart with:
+
+- Slash command: `/token-chart`
+- Command palette value: `token.usage.chart`
+
+## How It Works
+
+- Registers a TUI route named `token-usage` and a command `/token-chart`.
+- Aggregates usage from assistant messages into chart buckets (`15min`, `30min`, `hour`, `day`, `week`, `month`).
+- Supports dynamic scopes: `all`, optional `workspace`, and optional `session`.
+- Total tokens are calculated as `input + output + reasoning + cache.read + cache.write`.
+- Includes refresh and diagnostics helpers directly in the chart view.
+
+## Requirements
+
+- OpenCode with TUI plugin support
+
+## License
+
+MIT
