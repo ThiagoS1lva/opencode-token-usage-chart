@@ -25,6 +25,9 @@ type Data = {
     tokens: number
     cost: number
   }
+  debug: {
+    lines: string[]
+  }
 }
 
 type LoadOptions = {
@@ -43,6 +46,27 @@ type SessionAggregate = {
   stamp: string
   bins: Map<number, Bin>
   total: Bin
+  stats: {
+    messages: number
+    assistant: number
+    inRange: number
+    cached: boolean
+    error?: string
+  }
+}
+
+type GlobalCallOptions = {
+  headers: {
+    "x-opencode-directory": string
+    "x-opencode-workspace": string
+  }
+}
+
+const GLOBAL_CALL_OPTIONS: GlobalCallOptions = {
+  headers: {
+    "x-opencode-directory": "",
+    "x-opencode-workspace": "",
+  },
 }
 
 type BackTarget =
@@ -55,6 +79,7 @@ type BackTarget =
     }
 
 const sessionAggregateCache = new Map<string, SessionAggregate>()
+const CACHE_VERSION = "v6"
 
 function isFastMode(mode: Gran) {
   return mode === "15min" || mode === "30min" || mode === "hour"
@@ -70,7 +95,7 @@ function messageLimit(mode: Gran) {
 }
 
 function sessionListLimit(mode: Gran) {
-  return isFastMode(mode) ? 2000 : 10000
+  return isFastMode(mode) ? 5000 : 20000
 }
 
 function count(input: Gran) {
@@ -207,41 +232,64 @@ function sessionStamp(session: unknown) {
 async function aggregateSession(
   client: TuiPluginApi["client"],
   sessionID: string,
+  directory: string | undefined,
   stamp: string,
   mode: Gran,
   range: { start: number; end: number },
   options: Pick<LoadOptions, "shouldStop">,
 ) {
-  const key = `${sessionID}:${mode}:${range.start}:${range.end}`
+  const key = `${directory ?? "default"}:${sessionID}:${mode}:${range.start}:${range.end}`
   const cached = sessionAggregateCache.get(key)
-  if (cached && cached.stamp === stamp) return cached
+  if (cached && cached.stamp === stamp) {
+    return {
+      ...cached,
+      stats: {
+        ...cached.stats,
+        cached: true,
+      },
+    }
+  }
 
   if (options.shouldStop?.()) {
     return {
       stamp,
       bins: new Map<number, Bin>(),
       total: { tokens: 0, cost: 0 },
+      stats: {
+        messages: 0,
+        assistant: 0,
+        inRange: 0,
+        cached: false,
+      },
     } satisfies SessionAggregate
   }
 
+  let messageError: string | undefined
   const messages = await client.session
-    .messages({ sessionID, limit: messageLimit(mode) })
+    .messages({ sessionID, directory, limit: messageLimit(mode) } as { sessionID: string; directory?: string; limit: number }, GLOBAL_CALL_OPTIONS)
     .then((x) => x.data ?? [])
-    .catch(() => [])
+    .catch((error) => {
+      messageError = error instanceof Error ? error.message : String(error)
+      return []
+    })
 
   const bins = new Map<number, Bin>()
   let total: Bin = {
     tokens: 0,
     cost: 0,
   }
+  let assistantCount = 0
+  let inRangeCount = 0
 
   for (let i = messages.length - 1; i >= 0; i--) {
     if (options.shouldStop?.()) break
     const info = messages[i].info
     if (info.role !== "assistant") continue
+    assistantCount++
     const created = info.time.created
     if (created >= range.end) continue
-    if (created < range.start) break
+    if (created < range.start) continue
+    inRangeCount++
 
     const bucket = start(created, mode)
     const value = bins.get(bucket) ?? { tokens: 0, cost: 0 }
@@ -257,6 +305,13 @@ async function aggregateSession(
     stamp,
     bins,
     total,
+    stats: {
+      messages: messages.length,
+      assistant: assistantCount,
+      inRange: inRangeCount,
+      cached: false,
+      error: messageError,
+    },
   }
   sessionAggregateCache.set(key, out)
   if (sessionAggregateCache.size > 500) {
@@ -273,10 +328,41 @@ async function load(
   ref: { sessionID?: string; workspaceID?: string },
   options: LoadOptions = {},
 ) {
+  const debugLines: string[] = []
+
+  const apiWithScopes = api as TuiPluginApi & {
+    scopedClient?: (workspaceID?: string) => TuiPluginApi["client"]
+    state?: {
+      workspace?: {
+        list?: () => Array<{ id?: string }>
+      }
+    }
+  }
+
+  const workspaceIDs = Array.from(
+    new Set(
+      (apiWithScopes.state?.workspace?.list?.() ?? [])
+        .map((item) => item?.id)
+        .filter((item): item is string => typeof item === "string" && item.length > 0),
+    ),
+  )
+
+  const allScopeRef = workspaceIDs.length > 0 ? `all:${workspaceIDs.sort().join(",")}` : "all"
   const scopeRef = scope === "session" ? ref.sessionID ?? "none" : scope === "workspace" ? ref.workspaceID ?? "none" : "all"
-  const key = `token-usage-cache:${mode}:${scope}:${scopeRef}`
+  const key = `token-usage-cache:${CACHE_VERSION}:${mode}:${scope}:${scope === "all" ? allScopeRef : scopeRef}`
   const hit = api.kv.get<{ time: number; data: Data } | undefined>(key, undefined)
-  if (!options.force && hit && Date.now() - hit.time < 5 * 60 * 1000) return hit.data
+  if (!options.force && hit && Date.now() - hit.time < 5 * 60 * 1000) {
+    return {
+      ...hit.data,
+      debug: {
+        lines: [
+          ...(hit.data.debug?.lines ?? []),
+          `cache hit key=${key}`,
+          `cache age ms=${Date.now() - hit.time}`,
+        ],
+      },
+    }
+  }
 
   const rows = buildRows(mode)
 
@@ -286,22 +372,107 @@ async function load(
     end: add(rows[rows.length - 1]?.key ?? 0, mode, 1),
   }
 
-  const scoped = scope === "workspace" && ref.workspaceID ? api.scopedClient(ref.workspaceID) : api.client
-  let sessions: Array<{ id: string; stamp: string }> = []
+  debugLines.push(`cache miss key=${key}`)
+  debugLines.push(`scope=${scope} mode=${mode}`)
+  debugLines.push(`workspace ids=${workspaceIDs.length}`)
+  debugLines.push(`window start=${new Date(range.start).toISOString()} end=${new Date(range.end).toISOString()}`)
+
+  const clientSources: Array<{ key: string; client: TuiPluginApi["client"] }> = []
+  if (scope === "workspace") {
+    if (ref.workspaceID && apiWithScopes.scopedClient) {
+      clientSources.push({ key: `workspace:${ref.workspaceID}`, client: apiWithScopes.scopedClient(ref.workspaceID) })
+    } else {
+      clientSources.push({ key: "workspace:default", client: api.client })
+    }
+  } else if (scope === "all") {
+    clientSources.push({ key: "all:default", client: api.client })
+    if (apiWithScopes.scopedClient) {
+      workspaceIDs.forEach((workspaceID) => {
+        clientSources.push({ key: `all:${workspaceID}`, client: apiWithScopes.scopedClient?.(workspaceID) ?? api.client })
+      })
+    }
+  } else {
+    clientSources.push({ key: "session", client: api.client })
+  }
+  debugLines.push(`client sources=${clientSources.map((item) => item.key).join(",")}`)
+
+  let sessions: Array<{ id: string; stamp: string; client: TuiPluginApi["client"]; directory?: string }> = []
   if (scope === "session") {
     if (!ref.sessionID) {
       return {
         rows,
         total: { tokens: 0, cost: 0 },
+        debug: {
+          lines: [...debugLines, "missing sessionID for session scope"],
+        },
       }
     }
-    sessions = [{ id: ref.sessionID, stamp: ref.sessionID }]
+    sessions = [{ id: ref.sessionID, stamp: ref.sessionID, client: api.client, directory: undefined }]
   } else {
-    const list = await scoped.session
-      .list({ roots: true, start: range.start, limit: sessionListLimit(mode) })
+    const dedup = new Map<string, { id: string; stamp: string; client: TuiPluginApi["client"]; directory?: string }>()
+
+    const globalList = await api.client.session
+      .list({ limit: sessionListLimit(mode) }, GLOBAL_CALL_OPTIONS)
       .then((x) => x.data ?? [])
-    sessions = list.map((item) => ({ id: item.id, stamp: sessionStamp(item) || item.id }))
+      .catch(() => [])
+    debugLines.push(`sessions from global override: ${globalList.length}`)
+    globalList.forEach((item) => {
+      if (!item?.id) return
+      if (dedup.has(item.id)) return
+      dedup.set(item.id, {
+        id: item.id,
+        stamp: sessionStamp(item) || item.id,
+        client: api.client,
+        directory: undefined,
+      })
+    })
+
+    const projects = await api.client.project
+      .list(undefined, GLOBAL_CALL_OPTIONS)
+      .then((x) => x.data ?? [])
+      .catch(() => [])
+    debugLines.push(`projects discovered: ${projects.length}`)
+
+    for (const project of projects) {
+      if (!project?.worktree) continue
+      const list = await api.client.session
+        .list({ directory: project.worktree, limit: sessionListLimit(mode) }, GLOBAL_CALL_OPTIONS)
+        .then((x) => x.data ?? [])
+        .catch(() => [])
+      debugLines.push(`sessions from project ${project.worktree}: ${list.length}`)
+      list.forEach((item) => {
+        if (!item?.id) return
+        if (dedup.has(item.id)) return
+        dedup.set(item.id, {
+          id: item.id,
+          stamp: sessionStamp(item) || item.id,
+          client: api.client,
+          directory: project.worktree,
+        })
+      })
+    }
+
+    for (const source of clientSources) {
+      if (options.shouldStop?.()) break
+      const list = await source.client.session
+        .list({ limit: sessionListLimit(mode) }, GLOBAL_CALL_OPTIONS)
+        .then((x) => x.data ?? [])
+        .catch(() => [])
+      debugLines.push(`sessions from ${source.key}: ${list.length}`)
+      list.forEach((item) => {
+        if (!item?.id) return
+        if (dedup.has(item.id)) return
+        dedup.set(item.id, {
+          id: item.id,
+          stamp: sessionStamp(item) || item.id,
+          client: source.client,
+          directory: undefined,
+        })
+      })
+    }
+    sessions = Array.from(dedup.values())
   }
+  debugLines.push(`dedup sessions=${sessions.length}`)
 
   const size = isFastMode(mode) ? 6 : 10
 
@@ -309,16 +480,28 @@ async function load(
     tokens: 0,
     cost: 0,
   }
+  let totalMessagesScanned = 0
+  let totalAssistantMessages = 0
+  let totalInRangeMessages = 0
+  let cachedSessionCount = 0
+  let sessionFetchErrors = 0
 
   for (let i = 0; i < sessions.length; i += size) {
     if (options.shouldStop?.()) break
     const part = sessions.slice(i, i + size)
     const packs = await Promise.all(
       part.map((session) =>
-        aggregateSession(scoped, session.id, session.stamp, mode, range, options).catch(() => ({
+        aggregateSession(session.client, session.id, session.directory, session.stamp, mode, range, options).catch(() => ({
           stamp: session.stamp,
           bins: new Map<number, Bin>(),
           total: { tokens: 0, cost: 0 },
+          stats: {
+            messages: 0,
+            assistant: 0,
+            inRange: 0,
+            cached: false,
+            error: "aggregateSession failed",
+          },
         })),
       ),
     )
@@ -332,12 +515,29 @@ async function load(
       })
       total.tokens += pack.total.tokens
       total.cost += pack.total.cost
+      totalMessagesScanned += pack.stats.messages
+      totalAssistantMessages += pack.stats.assistant
+      totalInRangeMessages += pack.stats.inRange
+      if (pack.stats.cached) cachedSessionCount++
+      if (pack.stats.error) sessionFetchErrors++
     })
   }
+
+  const rowsWithData = rows.reduce((count, row) => (row.tokens > 0 || row.cost > 0 ? count + 1 : count), 0)
+  debugLines.push(`messages scanned=${totalMessagesScanned}`)
+  debugLines.push(`assistant messages=${totalAssistantMessages}`)
+  debugLines.push(`assistant in window=${totalInRangeMessages}`)
+  debugLines.push(`session cache hits=${cachedSessionCount}`)
+  debugLines.push(`session fetch errors=${sessionFetchErrors}`)
+  debugLines.push(`rows with data=${rowsWithData}/${rows.length}`)
+  debugLines.push(`total tokens=${Math.round(total.tokens)} total cost=${total.cost.toFixed(4)}`)
 
   const out = {
     rows,
     total,
+    debug: {
+      lines: debugLines,
+    },
   } satisfies Data
 
   api.kv.set(key, { time: Date.now(), data: out })
@@ -393,9 +593,10 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
   const [mode, setMode] = createSignal<Gran>("day")
   const [kind, setKind] = createSignal<Metr>("tokens")
   const [scope, setScope] = createSignal<Scope>(props.back.name === "session" ? "session" : "all")
+  const [debug, setDebug] = createSignal(false)
   const [busy, setBusy] = createSignal(true)
   const [err, setErr] = createSignal<string>()
-  const [data, setData] = createSignal<Data>({ rows: [], total: { tokens: 0, cost: 0 } })
+  const [data, setData] = createSignal<Data>({ rows: [], total: { tokens: 0, cost: 0 }, debug: { lines: [] } })
   let requestID = 0
   let disposed = false
 
@@ -483,6 +684,13 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
       return
     }
 
+    if (evt.name === "d") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      setDebug((value) => !value)
+      return
+    }
+
     if (evt.name === "s") {
       evt.preventDefault()
       evt.stopPropagation()
@@ -544,7 +752,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
         <b>Token Usage Chart</b>
       </text>
       <text fg={props.api.theme.current.textMuted}>
-        window: {mode()} | metric: {kind()} | scope: {scope()} | keys: tab/left/right window, up/down metric, s scope, r refresh, esc back
+        window: {mode()} | metric: {kind()} | scope: {scope()} | debug: {debug() ? "on" : "off"} | keys: tab/left/right window, up/down metric, s scope, r refresh, d debug, esc back
       </text>
 
       <Show when={busy()}>
@@ -580,6 +788,13 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
         <text fg={props.api.theme.current.textMuted}>total tokens: {fmt(data().total.tokens)}</text>
         <text fg={props.api.theme.current.textMuted}>total cost: {money.format(data().total.cost)}</text>
       </box>
+
+      <Show when={debug() && data().debug.lines.length > 0}>
+        <box flexDirection="column" marginTop={1}>
+          <text fg={props.api.theme.current.info}>Debug</text>
+          <For each={data().debug.lines}>{(line) => <text fg={props.api.theme.current.textMuted}>- {line}</text>}</For>
+        </box>
+      </Show>
     </box>
   )
 }
