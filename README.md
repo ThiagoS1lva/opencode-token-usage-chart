@@ -4,22 +4,37 @@ OpenCode TUI plugin that adds a token usage chart screen.
 
 ## Install from npm
 
-1. Publish this package to npm (or use your own forked package name).
-2. Add it to your OpenCode `tui.json`:
+Package name:
+
+`@thiagos1lva/opencode-token-usage-chart`
+
+### Global install (all projects)
+
+Add to `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
+  "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    [
-      "opencode-token-usage-chart",
-      {
-        "enabled": true
-      }
-    ]
+    "@thiagos1lva/opencode-token-usage-chart"
   ]
 }
 ```
+
+### Local install (single repo)
+
+Add to `<repo>/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@thiagos1lva/opencode-token-usage-chart"
+  ]
+}
+```
+
+OpenCode installs npm plugins automatically at startup.
 
 ## Use
 
@@ -51,5 +66,3 @@ npm login
 npm pack --dry-run
 npm publish --access public
 ```
-
-Package name `opencode-token-usage-chart` is currently available on npm.

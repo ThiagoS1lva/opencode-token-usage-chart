@@ -1,6 +1,6 @@
 {
-  "name": "opencode-token-usage-chart",
-  "version": "0.1.0",
+  "name": "@thiagos1lva/opencode-token-usage-chart",
+  "version": "0.2.0",
   "description": "OpenCode TUI plugin for token usage charts",
   "type": "module",
   "main": "./index.ts",
@@ -19,6 +19,15 @@
     "tui",
     "tokens"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thiagos1lva/opencode-token-usage-chart.git"
+  },
+  "homepage": "https://github.com/thiagos1lva/opencode-token-usage-chart#readme",
+  "bugs": {
+    "url": "https://github.com/thiagos1lva/opencode-token-usage-chart/issues"
+  },
+  "author": "Thiago Silva",
   "license": "MIT",
   "publishConfig": {
     "access": "public"
