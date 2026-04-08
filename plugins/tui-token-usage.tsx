@@ -786,11 +786,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
             <text fg={props.api.theme.current.textMuted} wrapMode="none">
               <Show
                 when={kind() === "both"}
-                fallback={
-                  <>
-                    {item.label.padEnd(11)} {bar(item.size)} {kind() === "cost" ? money.format(item.cost) : fmt(item.tokens)}
-                  </>
-                }
+                fallback={`${item.label.padEnd(11)} ${bar(item.size)} ${kind() === "cost" ? money.format(item.cost) : fmt(item.tokens)}`}
               >
                 {item.label.padEnd(11)} T:{barWith(item.tokenSize, "#")} {fmt(item.tokens)} C:{barWith(item.costSize, "=")} {money.format(item.cost)}
               </Show>
