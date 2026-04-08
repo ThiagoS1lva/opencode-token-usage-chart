@@ -12,16 +12,18 @@ bun add -g @thiagos1lva/opencode-token-usage-chart
 
 ## Usage
 
-Add the plugin to your `opencode.json`:
+Add the plugin to your `tui.json`:
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://opencode.ai/tui.json",
   "plugin": ["@thiagos1lva/opencode-token-usage-chart"]
 }
 ```
 
-> Note: in some OpenCode setups, the same config may be stored in `config.json` instead of `opencode.json`.
+For global usage, put this in `~/.config/opencode/tui.json`.
+
+For per-project usage, put this in `<repo>/tui.json`.
 
 That's it. OpenCode will load the plugin at startup.
 

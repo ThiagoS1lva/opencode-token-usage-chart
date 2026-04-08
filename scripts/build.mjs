@@ -39,3 +39,4 @@ async function buildTsx(inputPath, outputPath) {
 await rm(distDir, { recursive: true, force: true })
 await buildTsx(resolve(root, "plugins", "tui-token-usage.tsx"), resolve(distDir, "plugins", "tui-token-usage.js"))
 await writeFile(resolve(distDir, "index.js"), 'export { default } from "./plugins/tui-token-usage.js"\n', "utf8")
+await writeFile(resolve(distDir, "tui.js"), 'export { default } from "./plugins/tui-token-usage.js"\n', "utf8")

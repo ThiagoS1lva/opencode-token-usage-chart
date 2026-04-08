@@ -4,7 +4,7 @@
     [
       "./plugins/tui-token-usage.tsx",
       {
-        "enabled": true
+        "enabled": false
       }
     ],
     [
