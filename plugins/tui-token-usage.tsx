@@ -597,6 +597,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
   const [busy, setBusy] = createSignal(true)
   const [err, setErr] = createSignal<string>()
   const [data, setData] = createSignal<Data>({ rows: [], total: { tokens: 0, cost: 0 }, debug: { lines: [] } })
+  const [lastRefreshAt, setLastRefreshAt] = createSignal<number>()
   let requestID = 0
   let disposed = false
 
@@ -604,7 +605,14 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
     disposed = true
   })
 
-  const workspaceID = () => props.api.workspace.current()
+  const workspaceID = () => {
+    const apiWithWorkspace = props.api as TuiPluginApi & {
+      workspace?: {
+        current?: () => string | undefined
+      }
+    }
+    return apiWithWorkspace.workspace?.current?.()
+  }
   const scopeList = createMemo<Scope[]>(() => {
     const out: Scope[] = ["all"]
     if (workspaceID()) out.push("workspace")
@@ -632,6 +640,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
       .then((value) => {
         if (disposed || id !== requestID) return
         setData(value)
+        setLastRefreshAt(Date.now())
       })
       .catch((e) => {
         if (disposed || id !== requestID) return
@@ -665,6 +674,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
 
   useKeyboard((evt) => {
     if (props.api.route.current.name !== route) return
+    const key = (evt.name ?? "").toLowerCase()
 
     if (evt.name === "escape") {
       evt.preventDefault()
@@ -677,7 +687,7 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
       return
     }
 
-    if (evt.name === "r") {
+    if (key === "r" || key === "f5" || (evt.ctrl && key === "r")) {
       evt.preventDefault()
       evt.stopPropagation()
       pull(true)
@@ -752,8 +762,13 @@ function View(props: { api: TuiPluginApi; back: BackTarget }) {
         <b>Token Usage Chart</b>
       </text>
       <text fg={props.api.theme.current.textMuted}>
-        window: {mode()} | metric: {kind()} | scope: {scope()} | debug: {debug() ? "on" : "off"} | keys: tab/left/right window, up/down metric, s scope, r refresh, d debug, esc back
+        window: {mode()} | metric: {kind()} | scope: {scope()} | debug: {debug() ? "on" : "off"} | keys: tab/left/right window, up/down metric, s scope, r/ctrl+r/f5 refresh, d debug, esc back
       </text>
+      <Show when={lastRefreshAt()}>
+        {(ts) => (
+          <text fg={props.api.theme.current.textMuted}>last refresh: {new Date(ts()).toLocaleTimeString()}</text>
+        )}
+      </Show>
 
       <Show when={busy()}>
         <text fg={props.api.theme.current.textMuted}>Loading usage...</text>
